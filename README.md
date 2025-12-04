@@ -100,25 +100,3 @@ prediksi-api/
 ├── .gitignore
 └── README.md
 ```
-
-## Integration Partners
-
-- **Jelita Frontend**: CSV upload UI
-- **8EH Radio**: Listener prediction service
-
-## Team
-
-| Role | Member |
-|------|--------|
-| ML Pipeline | Faiz |
-| API & Deploy | Ryota |
-| Frontend | Jelita |
-
-## Course
-
-II3160 - Integrated System Technology  
-Institut Teknologi Bandung
-
-## License
-
-MIT
