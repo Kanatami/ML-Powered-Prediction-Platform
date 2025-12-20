@@ -9,11 +9,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+
     container_name: prediksi-api
     ports:
       - "8000:8000"
     volumes:
       - model_data:/app/app/models
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
     healthcheck:
