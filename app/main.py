@@ -125,7 +125,9 @@ async def list_models():
             updated_at=info.get("updated_at"),
             model_type=info.get("type"),
             feature_cols=info.get("feature_cols"),
-            target_col=info.get("target_col")
+            target_col=info.get("target_col"),
+            accuracy=info.get("accuracy"),
+            test_size=info.get("test_size")
         )
         for model_id, info in metadata.items()
     ]
@@ -209,7 +211,9 @@ async def get_model_status(model_id: str):
         updated_at=info.get("updated_at"),
         model_type=info.get("type"),
         feature_cols=info.get("feature_cols"),
-        target_col=info.get("target_col")
+        target_col=info.get("target_col"),
+        accuracy=info.get("accuracy"),
+        test_size=info.get("test_size")
     )
 
 
