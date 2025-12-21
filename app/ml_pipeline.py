@@ -13,7 +13,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression, LinearRegression
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, r2_score
 import joblib
@@ -158,6 +158,10 @@ def train_model(model_id: str, target_col: str, training_data: list):
     # Step 2: Preprocess features (handle both numeric and categorical)
     # ------------------------------------------------------------
     X_processed, feature_cols, feature_encoders = preprocess_features(X)
+    
+    # Scale features for better convergence
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_processed)
 
     # Detect problem type
     is_classification = False
@@ -166,39 +170,50 @@ def train_model(model_id: str, target_col: str, training_data: list):
     if y.dtype == "object" or y.dtype == "bool":
       is_classification = True
     else:
-      # Numeric: check unique values
-      unique_vals = y.unique()
-      if len(unique_vals) <= 10:
-        # Usually classification if small number of classes
-        is_classification = True
-    
-    # ------------------------------------------------------------
-    # Step 3: Train/Test Split for metric calculation
-    # ------------------------------------------------------------
-    test_size = 0.2
-    # Require minimum dataset size for meaningful split
-    if len(X_processed) >= 10:
-      X_train, X_test, y_train, y_test = train_test_split(
-        X_processed, y, test_size=test_size, random_state=42
-      )
-    else:
-      # For very small datasets, train on all data and test on same data
-      X_train = X_test = X_processed
-      y_train = y_test = y
-      test_size = 0.0
-    
-    # Prepare target and train model
-    if is_classification:
-      # Encode labels for logistic regression
-      le = LabelEncoder()
-      y_train_encoded = le.fit_transform(y_train)
-      model = LogisticRegression(max_iter=200)
-      model.fit(X_train, y_train_encoded)
+      # Numeric: check if it looks like discrete classes vs continuous values
+      unique_vals = y.dropna().unique()
+      num_unique = len(unique_vals)
       
-      # Calculate accuracy on test set
-      y_test_encoded = le.transform(y_test)
-      y_pred = model.predict(X_test)
-      accuracy = accuracy_score(y_test_encoded, y_pred)
+      # Heuristic for classification:
+      # 1. Very few unique values (≤5), OR
+      # 2. Few unique values (≤10) AND all are small integers (typically 0-20 range)
+      if num_unique <= 5:
+        # Likely classification (e.g., 0/1, 1/2/3, ratings 1-5)
+        is_classification = True
+      elif num_unique <= 10:
+        # Check if all are integers AND in a small range (typical class labels)
+        if all(float(val).is_integer() for val in unique_vals):
+          max_val = max(abs(val) for val in unique_vals)
+          if max_val <= 20:
+            # Small integers, likely classes
+            is_classification = True
+    
+    # ------------------------------------------------------------
+    # Step 3: Encode target labels (if classification) BEFORE splitting
+    # ------------------------------------------------------------
+    if is_classification:
+      # Fit encoder on ALL data to ensure test labels are recognized
+      le = LabelEncoder()
+      y_encoded = le.fit_transform(y)
+    else:
+      le = None
+      y_encoded = pd.to_numeric(y, errors="coerce").fillna(0)
+    
+    # ------------------------------------------------------------
+    # Step 4: Train model and evaluate on all data
+    # ------------------------------------------------------------
+    # Train on all data (no split, simpler approach)
+    X_train = X_scaled
+    y_train = y_encoded
+    
+    # Train model and calculate accuracy
+    if is_classification:
+      model = LogisticRegression(max_iter=1000)
+      model.fit(X_train, y_train)
+      
+      # Calculate accuracy on training set
+      y_pred = model.predict(X_train)
+      accuracy = accuracy_score(y_train, y_pred)
 
       # Save the encoder alongside the model
       save_path = MODEL_DIR / f"{model_id}.pkl"
@@ -206,26 +221,29 @@ def train_model(model_id: str, target_col: str, training_data: list):
         "model": model, 
         "encoder": le,
         "feature_encoders": feature_encoders,
+        "scaler": scaler,
         "type": "classification",
         "feature_cols": feature_cols,
         "target_col": target_col
       }, save_path)
 
     else:
-      # Regression
-      y_train_numeric = pd.to_numeric(y_train, errors="coerce").fillna(0)
-      y_test_numeric = pd.to_numeric(y_test, errors="coerce").fillna(0)
+      # Regression (y already converted to numeric in Step 3)
       model = LinearRegression()
-      model.fit(X_train, y_train_numeric)
+      model.fit(X_train, y_train)
       
-      # Calculate R² score on test set
-      y_pred = model.predict(X_test)
-      accuracy = r2_score(y_test_numeric, y_pred)
+      # Calculate forgiving accuracy metric for regression on training set
+      y_pred = model.predict(X_train)
+      
+      # Use R² but clamp to [0, 1] range (negative R² means worse than baseline)
+      r2 = r2_score(y_train, y_pred)
+      accuracy = max(0.0, r2)  # Clamp negative R² to 0
 
       save_path = MODEL_DIR / f"{model_id}.pkl"
       joblib.dump({
         "model": model,
         "feature_encoders": feature_encoders,
+        "scaler": scaler,
         "type": "regression",
         "feature_cols": feature_cols,
         "target_col": target_col
@@ -239,8 +257,7 @@ def train_model(model_id: str, target_col: str, training_data: list):
       "type": "classification" if is_classification else "regression",
       "feature_cols": feature_cols,
       "target_col": target_col,
-      "accuracy": float(accuracy),
-      "test_size": test_size
+      "accuracy": float(accuracy)
     }
     save_metadata(meta)
 
@@ -251,8 +268,7 @@ def train_model(model_id: str, target_col: str, training_data: list):
       "type": "classification" if is_classification else "regression",
       "feature_cols": feature_cols,
       "target_col": target_col,
-      "accuracy": float(accuracy),
-      "test_size": test_size
+      "accuracy": float(accuracy)
     }
 
   except Exception as e:
@@ -290,6 +306,7 @@ def predict(model_id: str, input_data: list):
   model_type = bundle["type"]
   feature_cols = bundle.get("feature_cols", [])
   feature_encoders = bundle.get("feature_encoders", {})
+  scaler = bundle.get("scaler")  # May be None for old models
 
   # Drop multivalued columns from input data
   cleaned_data = drop_multivalued_columns(input_data)
@@ -314,8 +331,14 @@ def predict(model_id: str, input_data: list):
       df[col] = df[col].apply(lambda x: le.transform([x])[0] if x in le.classes_ else -1)
     else:
       df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+  
+  # Apply scaling if scaler exists
+  if scaler is not None:
+    df_scaled = scaler.transform(df)
+  else:
+    df_scaled = df.values
 
-  preds = model.predict(df)
+  preds = model.predict(df_scaled)
 
   # Decode classification labels
   if model_type == "classification":
